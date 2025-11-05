@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0
+psycopg2-binary
+alembic
+pydantic
+python-multipart
+passlib[bcrypt]
+python-jose
+uuid
+redis
+celery
+python-dotenv
+pyjwt
