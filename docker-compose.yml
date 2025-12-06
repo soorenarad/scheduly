@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: scheduly_db
+    environment:
+      POSTGRES_USER: scheduly
+      POSTGRES_PASSWORD: scheduly_password
+      POSTGRES_DB: scheduly_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduly"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Celery and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: scheduly_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Application
+  api:
+    build: .
+    container_name: scheduly_api
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      DB_URL: postgresql://scheduly:scheduly_password@db:5432/scheduly_db
+      Redis_host: redis
+      Redis_port: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Celery Worker
+  celery:
+    build: .
+    container_name: scheduly_celery
+    command: celery -A celery_app worker --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      DB_URL: postgresql://scheduly:scheduly_password@db:5432/scheduly_db
+      Redis_host: redis
+      Redis_port: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
