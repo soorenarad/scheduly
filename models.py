@@ -1,4 +1,4 @@
-from sqlalchemy import (Column, Integer, String, ForeignKey, Boolean, func, Enum, DateTime, UniqueConstraint, DATETIME,
+from sqlalchemy import (Column, Integer, String, ForeignKey, Boolean, func, Enum, DateTime, UniqueConstraint, DateTime,
                         JSON)
 from sqlalchemy.orm import relationship
 from db import Base
@@ -26,8 +26,8 @@ class OrgRole(enum.Enum):
     viewer = "viewer"
 
 class UserOrgMemberships(Base):
-    __tablename__ = "userorgmemberships"
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    __tablename__ = "memberships"
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, primary_key=True)
     org_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(Enum(OrgRole, name="org_role_enum"), nullable=False)
 
@@ -69,15 +69,16 @@ class Posts(Base):
     body_text = Column(String, nullable=True)
     media_url = Column(String, nullable=False)
     status = Column(Enum(StatusPosts), nullable=False, index=True)
-    scheduled_at = Column(DATETIME, index=True, nullable=False)
-    published_at = Column(DATETIME, index=True, nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), index=True, nullable=False)
+    published_at = Column(DateTime(timezone=True), index=True, nullable=True)
     last_error = Column(String , nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DATETIME, index=True, nullable=True)
+    updated_at = Column(DateTime(timezone=True), index=True, nullable=True)
     approvals_required = Column(Boolean, index=True, nullable=False, default=False)
     celery_task_id = Column(String, nullable=True)
 
 class PostApprovals(Base):
+    __tablename__ = "approvals"
     id = Column(Integer, primary_key=True, index=True)
     post_id = Column(ForeignKey("posts.id"), nullable=False, index=True)
     approver_user_id = Column(ForeignKey("users.id"), nullable=False, index=True)
@@ -96,10 +97,10 @@ class OutBox(Base):
     post_id = Column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
     attempt_no = Column(Integer, default=0)
     payload_json = Column(JSON, nullable=True)
-    due_at = Column(DATETIME, nullable=True, index=True)
+    due_at = Column(DateTime(timezone=True), nullable=True, index=True)
     locked_by = Column(String, nullable=True)
-    locked_at = Column(DATETIME, nullable=True)
-    completed_at = Column(DATETIME, nullable=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(Enum(StatusOutBox), nullable=False, index=True)
     error = Column(String, nullable=True)
 
@@ -112,18 +113,20 @@ class OutBox(Base):
 
 
 class ApiKeys(Base):
+    __tablename__ = "apikey"
     id = Column(Integer, primary_key=True, index=True)
     org_id = Column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, unique=True, nullable=False)
     key_hash = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    last_used_at = Column(DATETIME, nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
     active = Column(Boolean, default=True)
 
 
 class RefreshToken(Base):
+    __tablename__ = "refresh"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     token_hash = Column(String, nullable=False)
-    expires_at = Column(DATETIME, nullable=True)
-    revoked_at = Column(DATETIME, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)

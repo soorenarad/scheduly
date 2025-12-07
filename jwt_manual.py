@@ -8,7 +8,14 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_MINUTES = 60
 
 def create_access_token(data: dict) -> str:
-    """Create a signed JWT containing `data` and an expiry (exp)."""
+    """Create a signed JWT access token containing user data and expiry.
+    
+    Args:
+        data: Dictionary containing user information (typically {"sub": user_id}).
+        
+    Returns:
+        str: Encoded JWT access token string.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
@@ -17,6 +24,20 @@ def create_access_token(data: dict) -> str:
     return encoded_jwt
 
 def create_refresh_token(data: dict, redis: Redis, user_id, jti):
+    """Create a signed JWT refresh token and store it in Redis.
+    
+    Creates a refresh token with a unique JTI (JWT ID) and stores it in Redis
+    for revocation tracking. The token is stored with a TTL matching its expiration.
+    
+    Args:
+        data: Dictionary containing user information (typically {"sub": user_id}).
+        redis: Redis client instance for storing the token.
+        user_id: ID of the user the token belongs to.
+        jti: Unique JWT ID (JTI) for token tracking.
+        
+    Returns:
+        str: Encoded JWT refresh token string.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
@@ -29,6 +50,20 @@ def create_refresh_token(data: dict, redis: Redis, user_id, jti):
     return encoded_jwt
 
 def verify_token(token: str, token_type: str, redis: Redis):
+    """Verify and decode a JWT token.
+    
+    Validates the token signature, expiration, and type. For refresh tokens,
+    also verifies the token exists in Redis (not revoked).
+    
+    Args:
+        token: JWT token string to verify.
+        token_type: Type of token ("access" or "refresh").
+        redis: Redis client instance for checking refresh token validity.
+        
+    Returns:
+        str or tuple: For access tokens, returns user_id. For refresh tokens,
+                     returns (user_id, redis_key). Returns error string on failure.
+    """
     try:
         secret_key = SECRET_KEY_ACCESS if token_type.lower() == "access" else SECRET_KEY_REFRESH
         payload = jwt.decode(token, secret_key, algorithms=[ALGORITHM])
