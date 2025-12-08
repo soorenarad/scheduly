@@ -1,12 +1,14 @@
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from dotenv import load_dotenv
-import os
+from setting import settings
 
-load_dotenv()
- # your actual password
-DATABASE_URL = os.getenv("DB_URL")
+engine = create_async_engine(settings.DB_UR, echo=True)
 
-engine = create_engine(DATABASE_URL, echo=False)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+AsyncSessionLocal = sessionmaker(
+    engine,               # bind the engine here
+    expire_on_commit=False,
+    class_=AsyncSession,  # tell sessionmaker to produce AsyncSession instances
+    autoflush=False,      # optional
+)
+
 Base = declarative_base()

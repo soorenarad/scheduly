@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import models
 from sqlalchemy import select
 from passlib.context import CryptContext
@@ -30,7 +30,7 @@ def verify_password(plain_password, hashed_password):
     """
     return pwd_context.verify(plain_password, hashed_password)
 
-def create_user(db: Session, username: str, email: EmailStr, password: str):
+async def create_user(db: AsyncSession, username: str, email: EmailStr, password: str):
     """Create a new user in the database.
     
     Validates that username and email are unique, hashes the password,
@@ -48,29 +48,31 @@ def create_user(db: Session, username: str, email: EmailStr, password: str):
     Raises:
         HTTPException: If username or email already exists, or if user creation fails.
     """
-    exists_username = db.execute(select(models.User).where(models.User.username == username)).scalar_one_or_none()
-
+    exists_username_result  = await db.execute(select(models.User).where(models.User.username == username))
+    exists_username = exists_username_result.scalar_one_or_none()
     if exists_username:
         raise HTTPException(status_code=401, detail="Username already exists")
-    exists_email = db.execute(select(models.User).where(models.User.email == email)).scalar_one_or_none()
+    exists_email_result = await db.execute(select(models.User).where(models.User.email == email))
+    exists_email = exists_email_result.scalar_one_or_none()
     if exists_email:
         raise HTTPException(status_code=401, detail="Email already exists")
 
     hashed_password = hash_password(password)
 
     user = models.User(username=username, email=email, password=hashed_password)
+
     db.add(user)
 
     try:
-        db.commit()
+        await db.commit()
     except Exception:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail="Failed to create the user")
 
-    db.refresh(user)
+    await db.refresh(user)
     return user
 
-def get_user_by_email(email: EmailStr, db: Session):
+async def get_user_by_email(email: EmailStr, db: AsyncSession):
     """Retrieve a user by their email address.
     
     Args:
@@ -80,7 +82,8 @@ def get_user_by_email(email: EmailStr, db: Session):
     Returns:
         models.User: User object if found, False otherwise.
     """
-    user = db.execute(select(models.User).where(models.User.email == email)).scalar_one_or_none()
+    result = await db.execute(select(models.User).where(models.User.email == email))
+    user = result.scalar_one_or_none()
     if user:
         return user
     else: return False
