@@ -23,7 +23,7 @@ def create_access_token(data: dict) -> str:
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY_ACCESS, algorithm=ALGORITHM)
     return encoded_jwt
 
-def create_refresh_token(data: dict, redis: Redis, user_id, jti):
+async def create_refresh_token(data: dict, redis: Redis, user_id, jti):
     """Create a signed JWT refresh token and store it in Redis.
     
     Creates a refresh token with a unique JTI (JWT ID) and stores it in Redis
@@ -46,10 +46,10 @@ def create_refresh_token(data: dict, redis: Redis, user_id, jti):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY_REFRESH, algorithm=ALGORITHM)
     redis_key = f"refresh:{user_id}:{jti}"
     ttl = int((expire - datetime.utcnow()).total_seconds())
-    redis.setex(redis_key, ttl, encoded_jwt)
+    await redis.setex(redis_key, ttl, encoded_jwt)
     return encoded_jwt
 
-def verify_token(token: str, token_type: str, redis: Redis):
+async def verify_token(token: str, token_type: str, redis: Redis):
     """Verify and decode a JWT token.
     
     Validates the token signature, expiration, and type. For refresh tokens,
@@ -75,7 +75,7 @@ def verify_token(token: str, token_type: str, redis: Redis):
             raise JWTError("Token not found or revoked")
         if token_type == "refresh":
             redis_key = f"refresh:{user_id}:{jti}"
-            stored_token = redis.get(redis_key)
+            stored_token = await redis.get(redis_key)
             if not stored_token or stored_token.decode() != token:
                 raise JWTError("Token not found or revoked")
             return user_id, redis_key
