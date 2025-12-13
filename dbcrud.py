@@ -51,11 +51,11 @@ async def create_user(db: AsyncSession, username: str, email: EmailStr, password
     exists_username_result  = await db.execute(select(models.User).where(models.User.username == username))
     exists_username = exists_username_result.scalar_one_or_none()
     if exists_username:
-        raise HTTPException(status_code=401, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="Username already exists")
     exists_email_result = await db.execute(select(models.User).where(models.User.email == email))
     exists_email = exists_email_result.scalar_one_or_none()
     if exists_email:
-        raise HTTPException(status_code=401, detail="Email already exists")
+        raise HTTPException(status_code=409, detail="Email already exists")
 
     hashed_password = hash_password(password)
 

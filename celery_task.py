@@ -1,5 +1,6 @@
 from celery_app import celery_app
 from db import AsyncSessionLocal
+from sqlalchemy import select
 import models
 
 @celery_app.task
@@ -19,28 +20,28 @@ async def publish_post(post_id: int):
         Exception: If publishing fails, the exception is raised and post status
                   is set to "failed" with error message stored.
     """
-    db = AsyncSessionLocal()
+    async with AsyncSessionLocal() as db:
 
-    post_result = await db.query(models.Posts).filter(models.Posts.id == post_id)
-    post = post_result.first()
-    if not post:
-        return "Post not found"
+        post_result = await db.execute(select(models.Posts).where(models.Posts.id == post_id))
+        post = post_result.first()
+        if not post:
+            return "Post not found"
 
-    post_approved_result = await db.query(models.PostApprovals.approved_at).filter(models.PostApprovals.post_id == post_id)
-    post_approved = post_approved_result.first()
-    if post.approvals_required and post_approved is None:
-        return "Post not approved yet"
+        post_approved_result = await db.execute(select(models.PostApprovals.approved_at).where(models.PostApprovals.post_id == post_id))
+        post_approved = post_approved_result.first()
+        if post.approvals_required and post_approved is None:
+            return "Post not approved yet"
 
-    try:
-        print(f"Publishing post {post.id} to channel {post.channel_id}")
+        try:
+            print(f"Publishing post {post.id} to channel {post.channel_id}")
 
-        post.status = models.StatusPosts.published
-        await db.commit()
-        return "Published"
+            post.status = models.StatusPosts.published
+            await db.commit()
+            return "Published"
 
-    except Exception as e:
-        post.status = "failed"
-        post.last_error = e
-        await db.commit()
+        except Exception as e:
+            post.status = models.StatusPosts.failed
+            post.last_error = str(e)
+            await db.commit()
 
-        raise e
+            raise e

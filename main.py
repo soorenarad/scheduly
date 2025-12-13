@@ -1,7 +1,7 @@
 # Standard library
 import uuid
 from typing import Optional, AsyncGenerator
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Third-party
 from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, Query
@@ -105,14 +105,16 @@ async def signin(response: Response, user: UserSignIn, db: AsyncSession = Depend
         HTTPException: If email or password is incorrect.
     """
     user_db = await get_user_by_email(user.email, db)
+    if not user_db:
+        raise HTTPException(status_code=400, detail="User doesn't exists")
     verify = await run_in_threadpool(verify_password, user.password, user_db.password)
 
-    if not user_db or not verify:
-        return HTTPException(status_code=400, detail="Email or Password is wrong!")
+    if not verify:
+        raise HTTPException(status_code=400, detail="Email or Password is wrong!")
 
-    access = create_access_token(data={"sub": user_db[0]})
+    access = create_access_token(data={"sub": str(user_db.id)})
     jti = str(uuid.uuid4())
-    refresh = await create_refresh_token(data={"sub": user_db[0]}, redis=r, user_id=user_db.id, jti=jti)
+    refresh = await create_refresh_token(data={"sub": str(user_db.id)}, redis=r, user_id=user_db.id, jti=jti)
 
     response.set_cookie(
         key="refresh_token",
@@ -141,10 +143,11 @@ async def access_token(request: Request, r: redis.Redis = Depends(get_redis)):
         HTTPException: If refresh token doesn't exist or is expired/invalid.
     """
     refresh = request.cookies.get("refresh_token")
+    print(refresh)
     if not refresh:
-        return HTTPException(status_code=400, detail="token doesnt exists or expired")
-    user_id = await verify_token(refresh, "refresh", r)
-    access = create_access_token(data={"sub": user_id})
+        raise HTTPException(status_code=400, detail="token doesnt exists or expired")
+    user_id, redis_key = await verify_token(refresh, "refresh", r)
+    access = create_access_token(data={"sub": str(user_id)})
 
     return {"access_token": access}
 
@@ -164,8 +167,7 @@ async def logout(request: Request, response: Response, r: redis.Redis = Depends(
     """
     refresh = request.cookies.get("refresh_token")
     if refresh:
-        payload = await verify_token(refresh, "refresh", r)
-        redis_key = payload[1]
+        user_id, redis_key = await verify_token(refresh, "refresh", r)
         await r.delete(redis_key)
         response.delete_cookie(
             key="refresh_token",
@@ -202,7 +204,7 @@ async def validate_user_token(token: str = Depends(oauth2_scheme), r : redis.Red
         if not payload:
             raise credentials_exception
         return payload
-    except JWTError:
+    except (JWTError, HTTPException):
         raise credentials_exception
 
 class CreateOrg(BaseModel):
@@ -226,7 +228,7 @@ async def create_org(org: CreateOrg, user = Depends(validate_user_token), db : A
     await db.commit()
     await db.refresh(new_org)
 
-    member = models.UserOrgMemberships(user_id=user, org_id=org.id, role="owner")
+    member = models.UserOrgMemberships(user_id=int(user), org_id=new_org.id, role=models.OrgRole.owner)
 
     db.add(member)
     await db.commit()
@@ -235,6 +237,7 @@ async def create_org(org: CreateOrg, user = Depends(validate_user_token), db : A
     return {
         "org_name": org.name,
         "user_id": user,
+        "org_id": new_org.id
     }
 
 @app.get("/orgs/{org_id}/members")
@@ -256,6 +259,7 @@ async def get_org(org_id: int, user = Depends(validate_user_token), db : AsyncSe
     )
     result = await db.execute(stmt)
     rows = result.all()
+    print(rows)
     members = {username: role.value for username, role in rows}
     return members
 
@@ -263,7 +267,7 @@ class Member(BaseModel):
     email: EmailStr
     role: str
 
-@app.post("orgs/{org_id}/invite")
+@app.post("/orgs/{org_id}/invite")
 async def invite_member(org_id: int, member: Member, user = Depends(validate_user_token), db: AsyncSession = Depends(get_db)):
     """Invite a user to join an organization.
     
@@ -288,7 +292,7 @@ async def invite_member(org_id: int, member: Member, user = Depends(validate_use
         raise HTTPException(status_code=400, detail="organization doesn't exists")
     requester_role_result = await db.execute(select(models.UserOrgMemberships.role).where
                          (models.UserOrgMemberships.org_id == org.id,
-                          models.UserOrgMemberships.user_id == user))
+                          models.UserOrgMemberships.user_id == int(user)))
 
     requester_role = requester_role_result.scalar_one_or_none()
 
@@ -297,8 +301,8 @@ async def invite_member(org_id: int, member: Member, user = Depends(validate_use
     target_user = await get_user_by_email(member.email, db)
     if not target_user:
         raise HTTPException(status_code=400, detail="target user doesn't exists")
-
-    new_member = models.UserOrgMemberships(user_id=target_user.id, org_id=org.id, role=member.role)
+    role = OrgRole(member.role)
+    new_member = models.UserOrgMemberships(user_id=target_user.id, org_id=org.id, role=role)
     db.add(new_member)
     await db.commit()
     await db.refresh(new_member)
@@ -339,16 +343,16 @@ async def change_role(org_id: int, user_id: int, new_role: UpdateRole, user = De
                                 (models.UserOrgMemberships.org_id == org_id,
                                  models.UserOrgMemberships.user_id == user_id))
     target_user = target_user_result.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=400, detail="User is not a member of this organization")
     if target_user.role == models.OrgRole.owner:
         raise HTTPException(status_code=400, detail="User is already owner and can not be changed")
 
-    if user_id == user and target_user.role != requester_role:
+    if user_id == user:
         raise HTTPException(status_code=403, detail="Cannot change your own role")
 
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User is not a member of this organization")
-
     target_user.role = OrgRole(new_role.new_role)
+
     await db.commit()
     await db.refresh(target_user)
 
@@ -377,7 +381,8 @@ async def create_channel(org_id: int, channel: Channel, user = Depends(validate_
     Raises:
         HTTPException: If user lacks permission to create channels.
     """
-    user_role_result = await db.execute(select(models.UserOrgMemberships.role).where(models.UserOrgMemberships.user_id == user))
+    user_role_result = await db.execute(select(models.UserOrgMemberships.role)
+                                        .where(models.UserOrgMemberships.user_id == user, models.UserOrgMemberships.org_id == org_id))
     user_role = user_role_result.scalar_one_or_none()
     if user_role not in [OrgRole.owner, OrgRole.admin]:
         raise HTTPException(status_code=403, detail="not enough permission to connect a channel")
@@ -426,18 +431,18 @@ async def oauth_callback(org_id: int, channel_id: int, user = Depends(validate_u
 
     return "Channel connected successfully"
 
-class ChannelBase(BaseModel):
+class ChannelMinimal(BaseModel):
     id: int
     org_id: int
     provider: str
     display_name: str
-    created_at: str
+    created_at: datetime
     is_active: bool
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
-@app.get("/orgs/{org_id}/channels", response_model=list[ChannelBase])
+@app.get("/orgs/{org_id}/channels", response_model=list[ChannelMinimal])
 async def get_channels(org_id: int, user = Depends(validate_user_token), db: AsyncSession = Depends(get_db)):
     """Get all channels for an organization.
     
@@ -450,11 +455,11 @@ async def get_channels(org_id: int, user = Depends(validate_user_token), db: Asy
         list[ChannelBase]: List of channel objects for the organization.
     """
     channels_result = await db.execute(select(models.Channels).filter_by(org_id=org_id))
-    channels = channels_result.all()
+    channels = channels_result.scalars().all()
     return channels
 
 @app.delete("/channels/{channel_id}")
-async def delete_channel(channel_id: str, user = Depends(validate_user_token), db: AsyncSession = Depends(get_db)):
+async def delete_channel(channel_id: int, org_id: int, user = Depends(validate_user_token), db: AsyncSession = Depends(get_db)):
     """Delete a channel.
     
     Only owners and admins can delete channels.
@@ -463,6 +468,7 @@ async def delete_channel(channel_id: str, user = Depends(validate_user_token), d
         channel_id: ID of the channel to delete.
         user: Authenticated user ID from token validation.
         db: Database session dependency.
+        org_id: sent from payload
         
     Returns:
         dict: Success message indicating channel was deleted.
@@ -471,7 +477,7 @@ async def delete_channel(channel_id: str, user = Depends(validate_user_token), d
         HTTPException: If user lacks permission or channel doesn't exist.
     """
     user_role_result = await db.execute(select(models.UserOrgMemberships.role).where(
-        models.UserOrgMemberships.user_id == user))
+        models.UserOrgMemberships.user_id == user, models.UserOrgMemberships.org_id == org_id))
     user_role = user_role_result.scalar_one_or_none()
 
 
@@ -516,7 +522,7 @@ async def create_post(org_id: int, post: Post, user = Depends(validate_user_toke
         HTTPException: If user is a viewer (cannot create posts).
     """
     user_role_result = await db.execute(select(models.UserOrgMemberships.role).
-                           where(models.UserOrgMemberships.user_id == user))
+                           where(models.UserOrgMemberships.user_id == user, models.UserOrgMemberships.org_id == org_id))
     user_role = user_role_result.scalar_one_or_none()
     if user_role == OrgRole.viewer:
         raise HTTPException(status_code=400, detail="Viewer can not create post")
@@ -534,7 +540,7 @@ async def create_post(org_id: int, post: Post, user = Depends(validate_user_toke
     await db.commit()
     await db.refresh(new_post)
 
-    task = await publish_post.apply_async(args=[new_post.id], eta=post.scheduled_at)
+    task = publish_post.apply_async(args=[new_post.id], eta=post.scheduled_at)
 
     new_post.celery_task_id = task.id
     await db.commit()
@@ -543,7 +549,7 @@ async def create_post(org_id: int, post: Post, user = Depends(validate_user_toke
     return {"message": "post scheduled"}
 
 
-@app.get("/orgs/{org_id}/posts")
+@app.get("/orgs/{org_id}/posts/{channel_id}")
 async def post_list(
     org_id: int,
     channel_id: int,
@@ -629,6 +635,8 @@ async def edit_post(post_id: int, update: Update, user = Depends(validate_user_t
     """
     post_result = await db.execute(select(models.Posts).where(models.Posts.id == post_id))
     post = post_result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post doesn't exists")
     _user_result = await db.execute(select(models.UserOrgMemberships)
                        .where(models.UserOrgMemberships.org_id == post.org_id,
                               models.UserOrgMemberships.user_id == user))
@@ -643,7 +651,9 @@ async def edit_post(post_id: int, update: Update, user = Depends(validate_user_t
         post.media_url = update.media
     if update.status:
         post.status = update.status
-    post.updated_at = func.now()
+
+    post.updated_at = datetime.now(timezone.utc)
+
     await db.commit()
 
     return {"message": "Post updated successfully"}
@@ -716,7 +726,7 @@ async def cancel_post(post_id: int, user = Depends(validate_user_token), db: Asy
 
     task_id = post.celery_task_id
 
-    celery_app.control.revoke(task_id, terminate=True)
+    await run_in_threadpool(celery_app.control.revoke, task_id, terminate=True)
 
     post.status = StatusPosts.canceled
     await db.commit()
@@ -757,3 +767,7 @@ async def publish_now(post_id: int, user = Depends(validate_user_token), db: Asy
     await db.commit()
 
     return {"message": "Post published successfully"}
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await redis_handle.close()
