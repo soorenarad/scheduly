@@ -1,11 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from fastapi import HTTPException
+
 from jose import jwt, JWTError
 from redis import Redis
-SECRET_KEY_ACCESS = "Very_Nice_Access_token"
-SECRET_KEY_REFRESH = "Very_Nice_Refresh_token"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-REFRESH_TOKEN_EXPIRE_MINUTES = 60
+from setting import settings
 
 def create_access_token(data: dict) -> str:
     """Create a signed JWT access token containing user data and expiry.
@@ -17,13 +15,13 @@ def create_access_token(data: dict) -> str:
         str: Encoded JWT access token string.
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     to_encode.update({"type": "access"})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY_ACCESS, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY_ACCESS, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def create_refresh_token(data: dict, redis: Redis, user_id, jti):
+async def create_refresh_token(data: dict, redis: Redis, user_id, jti):
     """Create a signed JWT refresh token and store it in Redis.
     
     Creates a refresh token with a unique JTI (JWT ID) and stores it in Redis
@@ -39,17 +37,17 @@ def create_refresh_token(data: dict, redis: Redis, user_id, jti):
         str: Encoded JWT refresh token string.
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     to_encode.update({"type": "refresh"})
     to_encode.update({"jti": jti})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY_REFRESH, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY_REFRESH, algorithm=settings.ALGORITHM)
     redis_key = f"refresh:{user_id}:{jti}"
-    ttl = int((expire - datetime.utcnow()).total_seconds())
-    redis.setex(redis_key, ttl, encoded_jwt)
+    ttl = int((expire - datetime.now(timezone.utc)).total_seconds())
+    await redis.setex(redis_key, ttl, encoded_jwt)
     return encoded_jwt
 
-def verify_token(token: str, token_type: str, redis: Redis):
+async def verify_token(token: str, token_type: str, redis: Redis):
     """Verify and decode a JWT token.
     
     Validates the token signature, expiration, and type. For refresh tokens,
@@ -65,8 +63,8 @@ def verify_token(token: str, token_type: str, redis: Redis):
                      returns (user_id, redis_key). Returns error string on failure.
     """
     try:
-        secret_key = SECRET_KEY_ACCESS if token_type.lower() == "access" else SECRET_KEY_REFRESH
-        payload = jwt.decode(token, secret_key, algorithms=[ALGORITHM])
+        secret_key = settings.SECRET_KEY_ACCESS if token_type.lower() == "access" else settings.SECRET_KEY_REFRESH
+        payload = jwt.decode(token, secret_key, algorithms=[settings.ALGORITHM])
         if payload.get("type") != token_type.lower():
             raise JWTError("Invalid token type")
         user_id = payload.get("sub")
@@ -75,11 +73,11 @@ def verify_token(token: str, token_type: str, redis: Redis):
             raise JWTError("Token not found or revoked")
         if token_type == "refresh":
             redis_key = f"refresh:{user_id}:{jti}"
-            stored_token = redis.get(redis_key)
-            if not stored_token or stored_token.decode() != token:
+            stored_token = await redis.get(redis_key)
+            if not stored_token or stored_token.decode("utf-8") != token:
                 raise JWTError("Token not found or revoked")
-            return user_id, redis_key
-        return user_id
-    except JWTError:
-        return "Failed to validate the token"
+            return int(user_id), redis_key
+        return int(user_id)
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail=f"verification failed {e}")
 

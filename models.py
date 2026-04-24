@@ -1,6 +1,5 @@
-from sqlalchemy import (Column, Integer, String, ForeignKey, Boolean, func, Enum, DateTime, UniqueConstraint, DateTime,
+from sqlalchemy import (Column, Integer, String, ForeignKey, Boolean, func, Enum, UniqueConstraint, DateTime,
                         JSON)
-from sqlalchemy.orm import relationship
 from db import Base
 import enum
 
@@ -67,7 +66,7 @@ class Posts(Base):
     channel_id = Column(ForeignKey("channels.id", ondelete="CASCADE"), nullable=False, index=True)
     author_user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     body_text = Column(String, nullable=True)
-    media_url = Column(String, nullable=False)
+    media_url = Column(String, nullable=True)
     status = Column(Enum(StatusPosts), nullable=False, index=True)
     scheduled_at = Column(DateTime(timezone=True), index=True, nullable=False)
     published_at = Column(DateTime(timezone=True), index=True, nullable=True)
